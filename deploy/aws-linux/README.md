@@ -32,7 +32,7 @@ cp backend/.env.example backend/.env && vim backend/.env
 sudo NGINX_MODE=snippet bash deploy/aws-linux/deploy.sh
 ```
 
-脚本会生成 `/etc/nginx/conf.d/projectx-api.conf`。在你现有的 `server { }` 里加入：
+脚本会生成 `/etc/nginx/snippets/projectx-api.conf`（**不要**放在 `conf.d/`）。在你现有的 `server { }` 里加入：
 
 ```nginx
 server {
@@ -48,7 +48,7 @@ server {
     }
 
     # ── ProjectX API 反代（必须）──
-    include /etc/nginx/conf.d/projectx-api.conf;
+    include /etc/nginx/snippets/projectx-api.conf;
 }
 ```
 

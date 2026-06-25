@@ -54,7 +54,7 @@ fi
 
 systemctl restart projectx-backend
 
-if command -v nginx &>/dev/null && [[ -f /etc/nginx/conf.d/projectx-api.conf || -f /etc/nginx/conf.d/projectx.conf ]]; then
+if command -v nginx &>/dev/null && [[ -f /etc/nginx/conf.d/projectx.conf ]]; then
   nginx -t && systemctl reload nginx
 fi
 

@@ -123,15 +123,21 @@ npm run build
 
 # ─── 6. Nginx（可选，兼容已有 Nginx）──────────────────────
 configure_nginx() {
-  local api_conf="/etc/nginx/conf.d/projectx-api.conf"
+  local api_snippet="/etc/nginx/snippets/projectx-api.conf"
+  mkdir -p /etc/nginx/snippets
+  # 旧版误放在 conf.d 会导致 nginx -t 失败，清理
+  rm -f /etc/nginx/conf.d/projectx-api.conf
+
   sed "s|__BACKEND_PORT__|$BACKEND_PORT|g" \
-    "$SCRIPT_DIR/nginx-projectx-api.conf" > "$api_conf"
+    "$SCRIPT_DIR/nginx-projectx-api.conf" > "$api_snippet"
 
   case "$NGINX_MODE" in
     snippet)
-      log "Nginx 片段模式: 已写入 $api_conf"
-      log "请在你的 server {} 中加入: include $api_conf;"
+      log "Nginx 片段: $api_snippet"
+      log "在你的 server {} 里加入: include $api_snippet;"
       log "前端静态目录: $INSTALL_DIR/frontend/dist"
+      log "片段模式不自动 reload Nginx（避免未 include 时配置无效）"
+      return 0
       ;;
     site)
       local site_conf="/etc/nginx/conf.d/projectx.conf"
