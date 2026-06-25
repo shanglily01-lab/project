@@ -1,0 +1,21 @@
+# secrets — never commit
+**/.env
+**/.env.local
+**/.env.prod
+*.pem
+*.key
+
+# dependencies & build
+**/node_modules/
+**/dist/
+**/build/
+**/.vite/
+**/*.tsbuildinfo
+
+# logs & runtime
+**/logs/
+*.log
+
+# os
+.DS_Store
+**/.DS_Store

@@ -1,0 +1,23 @@
+[Unit]
+Description=ProjectX Data Core Backend
+After=network.target
+
+[Service]
+Type=simple
+User=__APP_USER__
+Group=__APP_USER__
+WorkingDirectory=__INSTALL_DIR__/backend
+EnvironmentFile=__INSTALL_DIR__/backend/.env
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/node dist/index.js
+Restart=on-failure
+RestartSec=5
+
+# 安全加固
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=__INSTALL_DIR__/backend
+
+[Install]
+WantedBy=multi-user.target
