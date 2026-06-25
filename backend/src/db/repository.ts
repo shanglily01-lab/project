@@ -28,6 +28,20 @@ function toDate(s: string | null | undefined): Date | null {
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
+/** Parse YYYY-MM-DD into a Date for MySQL `date` columns (Drizzle expects Date, not string). */
+function toDayDate(s: string): Date {
+  const [y, m, d] = s.slice(0, 10).split('-').map(Number);
+  return new Date(y, m - 1, d);
+}
+
+function fmtDay(d: Date | string): string {
+  if (typeof d === 'string') return d.slice(0, 10);
+  const y = d.getFullYear();
+  const mo = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${mo}-${day}`;
+}
+
 function rowsOf(res: unknown): Record<string, unknown>[] {
   return (Array.isArray(res) ? res : (res as { rows?: unknown[] }).rows ?? []) as Record<string, unknown>[];
 }
@@ -158,7 +172,7 @@ export async function addComment(c: {
   targetType: string; targetId: string; date: string; author?: string | null; body: string;
 }): Promise<void> {
   await db.insert(opsComments).values({
-    targetType: c.targetType, targetId: c.targetId, date: c.date, author: c.author ?? null, body: c.body,
+    targetType: c.targetType, targetId: c.targetId, date: toDayDate(c.date), author: c.author ?? null, body: c.body,
   });
 }
 
@@ -212,7 +226,7 @@ export async function upsertPersonDaily(date: string, rows: PersonRaw[]): Promis
     .insert(opsPersonDaily)
     .values(rows.map((r) => ({
       personId: r.personId,
-      date,
+      date: toDayDate(date),
       opName: r.opName,
       totalTasks: r.totalTasks,
       inProgress: r.inProgress,
@@ -236,7 +250,7 @@ export async function upsertPersonDaily(date: string, rows: PersonRaw[]): Promis
 // ─── project daily ───────────────────────────────────
 
 export async function getProjectDailyByDate(date: string) {
-  return db.select().from(opsProjectDaily).where(eq(opsProjectDaily.date, date)).orderBy(desc(opsProjectDaily.blocked));
+  return db.select().from(opsProjectDaily).where(eq(opsProjectDaily.date, toDayDate(date))).orderBy(desc(opsProjectDaily.blocked));
 }
 
 export async function getProjectDailyHistory(projectName: string) {
@@ -272,7 +286,7 @@ export async function upsertProjectDaily(daily: ProjectDaily[]): Promise<number>
 
   const rows = daily.map((d) => ({
     projectName: d.projectName,
-    date: d.date,
+    date: toDayDate(d.date),
     totalTasks: d.totalTasks,
     inProgress: d.inProgress,
     blocked: d.blocked,
@@ -379,7 +393,7 @@ export async function upsertCodeDaily(rows: CodeDailyRow[]): Promise<number> {
   for (const part of chunk(rows, 500)) {
     await db
       .insert(opsCodeDaily)
-      .values(part)
+      .values(part.map((r) => ({ ...r, date: toDayDate(r.date) })))
       .onDuplicateKeyUpdate({
         set: {
           commits: sql`values(${opsCodeDaily.commits})`,
@@ -399,7 +413,7 @@ export async function upsertCodeDaily(rows: CodeDailyRow[]): Promise<number> {
 
 function mapCodeDaily(r: typeof opsCodeDaily.$inferSelect): CodeDailyRow {
   return {
-    personId: r.personId, date: r.date, commits: r.commits, substantiveCommits: r.substantiveCommits,
+    personId: r.personId, date: fmtDay(r.date), commits: r.commits, substantiveCommits: r.substantiveCommits,
     rawLoc: r.rawLoc, effectiveLoc: r.effectiveLoc, taskLinkedCommits: r.taskLinkedCommits,
     confidence: r.confidence, flags: (r.flags ?? []) as string[],
     sampleMessages: (r.sampleMessages ?? []) as string[], repos: (r.repos ?? []) as string[],
@@ -424,7 +438,7 @@ export async function getCodeDailyRange(from: string, to: string): Promise<CodeD
 }
 
 export async function getCodeDailyByDate(date: string): Promise<CodeDailyRow[]> {
-  const rows = await db.select().from(opsCodeDaily).where(eq(opsCodeDaily.date, date));
+  const rows = await db.select().from(opsCodeDaily).where(eq(opsCodeDaily.date, toDayDate(date)));
   return rows.map(mapCodeDaily);
 }
 
@@ -456,7 +470,7 @@ export interface CommitEventRow {
 export async function upsertCommitEvents(rows: CommitEventRow[]): Promise<number> {
   if (rows.length === 0) return 0;
   for (const part of chunk(rows, 500)) {
-    await db.insert(opsCommitEvents).values(part).onDuplicateKeyUpdate({ set: { id: sql`id` } });
+    await db.insert(opsCommitEvents).values(part.map((r) => ({ ...r, day: toDayDate(r.day) }))).onDuplicateKeyUpdate({ set: { id: sql`id` } });
   }
   return rows.length;
 }
@@ -476,7 +490,7 @@ export interface ActivityEventRow {
 export async function upsertActivityEvents(rows: ActivityEventRow[]): Promise<number> {
   if (rows.length === 0) return 0;
   for (const part of chunk(rows, 500)) {
-    await db.insert(opsActivityEvents).values(part).onDuplicateKeyUpdate({ set: { id: sql`id` } });
+    await db.insert(opsActivityEvents).values(part.map((r) => ({ ...r, day: toDayDate(r.day) }))).onDuplicateKeyUpdate({ set: { id: sql`id` } });
   }
   return rows.length;
 }
