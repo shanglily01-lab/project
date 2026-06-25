@@ -41,8 +41,24 @@ else
   die "未找到 dnf/yum，仅支持 Amazon Linux / RHEL 系"
 fi
 
-BASE_PKGS=(git rsync curl tar)
-$PKG install -y "${BASE_PKGS[@]}"
+# 仅安装缺失的包；Amazon Linux 2023 自带 curl-minimal，勿再装 curl（会冲突）
+install_missing_pkgs() {
+  local want=("$@")
+  local need=()
+  for p in "${want[@]}"; do
+    rpm -q "$p" &>/dev/null || need+=("$p")
+  done
+  if [[ ${#need[@]} -gt 0 ]]; then
+    $PKG install -y "${need[@]}"
+  else
+    log "系统包已满足: ${want[*]}"
+  fi
+}
+
+if ! command -v curl &>/dev/null; then
+  die "需要 curl 命令，请执行: dnf install -y curl-minimal"
+fi
+install_missing_pkgs git rsync tar
 
 if [[ "$SKIP_NGINX" != "1" ]] && ! command -v nginx &>/dev/null; then
   log "未检测到 Nginx，正在安装..."
