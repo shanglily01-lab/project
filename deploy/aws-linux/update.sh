@@ -43,14 +43,19 @@ if ! id "$APP_USER" &>/dev/null; then
 fi
 chown -R "$APP_USER:$APP_USER" "$INSTALL_DIR"
 
-if systemctl list-unit-files projectx-backend.service &>/dev/null; then
-  systemctl restart projectx-backend
-  if command -v nginx &>/dev/null && [[ -f /etc/nginx/conf.d/projectx-api.conf || -f /etc/nginx/conf.d/projectx.conf ]]; then
-    nginx -t && systemctl reload nginx
-  fi
-else
-  echo "[update] 警告: 未找到 projectx-backend 服务，请先运行: sudo bash deploy/aws-linux/deploy.sh"
-  exit 1
+SERVICE_FILE="/etc/systemd/system/projectx-backend.service"
+if [[ ! -f "$SERVICE_FILE" ]]; then
+  echo "[update] 注册 systemd 服务..."
+  sed "s|__INSTALL_DIR__|$INSTALL_DIR|g; s|__APP_USER__|$APP_USER|g" \
+    "$SCRIPT_DIR/projectx-backend.service" > "$SERVICE_FILE"
+  systemctl daemon-reload
+  systemctl enable projectx-backend
+fi
+
+systemctl restart projectx-backend
+
+if command -v nginx &>/dev/null && [[ -f /etc/nginx/conf.d/projectx-api.conf || -f /etc/nginx/conf.d/projectx.conf ]]; then
+  nginx -t && systemctl reload nginx
 fi
 
 sleep 2
