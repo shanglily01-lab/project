@@ -44,7 +44,10 @@ fi
 chown -R "$APP_USER:$APP_USER" "$INSTALL_DIR"
 
 if systemctl list-unit-files projectx-backend.service &>/dev/null; then
-  systemctl restart projectx-backend nginx
+  systemctl restart projectx-backend
+  if command -v nginx &>/dev/null && [[ -f /etc/nginx/conf.d/projectx-api.conf || -f /etc/nginx/conf.d/projectx.conf ]]; then
+    nginx -t && systemctl reload nginx
+  fi
 else
   echo "[update] 警告: 未找到 projectx-backend 服务，请先运行: sudo bash deploy/aws-linux/deploy.sh"
   exit 1

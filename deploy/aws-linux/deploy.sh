@@ -2,17 +2,27 @@
 # ─────────────────────────────────────────────────────────────
 # ProjectX Data Core — Amazon Linux 2023 / AL2 一键部署
 #
-# 用法（在 EC2 上，项目目录已上传或 git clone 后）:
+# 用法:
 #   sudo bash deploy/aws-linux/deploy.sh
 #
-# 部署前请准备好 backend/.env（含 DATABASE_URL、OP_* 等）
-# 脚本会安装 Node 22、Nginx，构建前后端，后端监听 3060，Nginx :80 对外
+# 服务器已有 Nginx 时（推荐）:
+#   sudo SKIP_NGINX=0 NGINX_MODE=snippet bash deploy/aws-linux/deploy.sh
+#   然后在你的 server {} 里: include /etc/nginx/conf.d/projectx-api.conf;
+#
+# 或使用独立端口提供完整站点（不占用 :80）:
+#   sudo NGINX_MODE=site NGINX_HTTP_PORT=8080 bash deploy/aws-linux/deploy.sh
+#
+# 完全跳过 Nginx（只部署后端 + 构建前端）:
+#   sudo SKIP_NGINX=1 bash deploy/aws-linux/deploy.sh
 # ─────────────────────────────────────────────────────────────
 set -euo pipefail
 
 BACKEND_PORT="${BACKEND_PORT:-3060}"
 APP_USER="${APP_USER:-projectx}"
 INSTALL_DIR="${INSTALL_DIR:-/opt/projectx-core-share}"
+SKIP_NGINX="${SKIP_NGINX:-0}"
+NGINX_MODE="${NGINX_MODE:-auto}"       # auto | snippet | site | skip
+NGINX_HTTP_PORT="${NGINX_HTTP_PORT:-8080}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
@@ -22,7 +32,7 @@ die() { echo "[deploy] ERROR: $*" >&2; exit 1; }
 [[ "$(id -u)" -eq 0 ]] || die "请使用 root 运行: sudo bash $0"
 
 # ─── 1. 系统依赖 ───────────────────────────────────────────
-log "安装系统包..."
+log "安装系统依赖..."
 if command -v dnf &>/dev/null; then
   PKG=dnf
 elif command -v yum &>/dev/null; then
@@ -31,7 +41,13 @@ else
   die "未找到 dnf/yum，仅支持 Amazon Linux / RHEL 系"
 fi
 
-$PKG install -y git nginx rsync curl tar
+BASE_PKGS=(git rsync curl tar)
+$PKG install -y "${BASE_PKGS[@]}"
+
+if [[ "$SKIP_NGINX" != "1" ]] && ! command -v nginx &>/dev/null; then
+  log "未检测到 Nginx，正在安装..."
+  $PKG install -y nginx
+fi
 
 if ! command -v node &>/dev/null || [[ "$(node -v | sed 's/v//' | cut -d. -f1)" -lt 20 ]]; then
   log "安装 Node.js 22..."
@@ -65,7 +81,6 @@ if [[ ! -f "$ENV_FILE" ]]; then
   fi
 fi
 
-# 确保 PORT=3060
 if grep -q '^PORT=' "$ENV_FILE"; then
   sed -i "s/^PORT=.*/PORT=$BACKEND_PORT/" "$ENV_FILE"
 else
@@ -78,7 +93,6 @@ cd "$INSTALL_DIR/backend"
 npm ci
 npm run build
 
-# 加载 .env 后执行数据库迁移
 set -a
 # shellcheck disable=SC1090
 source "$ENV_FILE"
@@ -91,17 +105,51 @@ cd "$INSTALL_DIR/frontend"
 npm ci
 npm run build
 
-# ─── 6. Nginx ──────────────────────────────────────────────
-log "配置 Nginx..."
-sed "s|__INSTALL_DIR__|$INSTALL_DIR|g; s|__BACKEND_PORT__|$BACKEND_PORT|g" \
-  "$SCRIPT_DIR/nginx-projectx.conf" \
-  > /etc/nginx/conf.d/projectx.conf
+# ─── 6. Nginx（可选，兼容已有 Nginx）──────────────────────
+configure_nginx() {
+  local api_conf="/etc/nginx/conf.d/projectx-api.conf"
+  sed "s|__BACKEND_PORT__|$BACKEND_PORT|g" \
+    "$SCRIPT_DIR/nginx-projectx-api.conf" > "$api_conf"
 
-# Amazon Linux 默认站点可能冲突
-rm -f /etc/nginx/conf.d/default.conf 2>/dev/null || true
-nginx -t
-systemctl enable nginx
-systemctl restart nginx
+  case "$NGINX_MODE" in
+    snippet)
+      log "Nginx 片段模式: 已写入 $api_conf"
+      log "请在你的 server {} 中加入: include $api_conf;"
+      log "前端静态目录: $INSTALL_DIR/frontend/dist"
+      ;;
+    site)
+      local site_conf="/etc/nginx/conf.d/projectx.conf"
+      sed "s|__INSTALL_DIR__|$INSTALL_DIR|g; s|__NGINX_HTTP_PORT__|$NGINX_HTTP_PORT|g" \
+        "$SCRIPT_DIR/nginx-projectx.conf" > "$site_conf"
+      log "Nginx 独立站点: 端口 $NGINX_HTTP_PORT → $site_conf"
+      ;;
+    *)
+      die "未知 NGINX_MODE=$NGINX_MODE"
+      ;;
+  esac
+
+  nginx -t
+  systemctl reload nginx 2>/dev/null || systemctl restart nginx
+  log "Nginx 已 reload"
+}
+
+if [[ "$SKIP_NGINX" == "1" ]]; then
+  log "跳过 Nginx 配置（SKIP_NGINX=1）"
+elif ! command -v nginx &>/dev/null; then
+  log "未安装 Nginx，跳过 Web 配置"
+else
+  if [[ "$NGINX_MODE" == "auto" ]]; then
+    if [[ -f /etc/nginx/nginx.conf ]] && grep -rq "server {" /etc/nginx/conf.d/ 2>/dev/null; then
+      NGINX_MODE=snippet
+      log "检测到已有 Nginx 站点，使用 snippet 模式（不覆盖 :80 default）"
+    else
+      NGINX_MODE=site
+      NGINX_HTTP_PORT=80
+      log "空 Nginx 环境，使用 site 模式监听 :80"
+    fi
+  fi
+  configure_nginx
+fi
 
 # ─── 7. Systemd 后端服务 ───────────────────────────────────
 log "配置 systemd 服务..."
@@ -114,9 +162,11 @@ systemctl daemon-reload
 systemctl enable projectx-backend
 systemctl restart projectx-backend
 
-# ─── 8. 防火墙（firewalld 若启用）────────────────────────
+# ─── 8. 防火墙 ─────────────────────────────────────────────
 if systemctl is-active firewalld &>/dev/null; then
   firewall-cmd --permanent --add-service=http || true
+  [[ "$NGINX_MODE" == "site" && "$NGINX_HTTP_PORT" != "80" ]] && \
+    firewall-cmd --permanent --add-port="${NGINX_HTTP_PORT}/tcp" || true
   firewall-cmd --reload || true
 fi
 
@@ -134,11 +184,15 @@ echo ""
 echo "══════════════════════════════════════════════════════"
 echo " 部署完成"
 echo "──────────────────────────────────────────────────────"
-echo " 前端:  http://$PUBLIC_IP/"
-echo " 后端:  http://$PUBLIC_IP:$BACKEND_PORT/health (内网直连)"
-echo " 日志:  journalctl -u projectx-backend -f"
-echo " 重载:  sudo systemctl restart projectx-backend nginx"
-echo "──────────────────────────────────────────────────────"
-echo " 请在 AWS 安全组放行: TCP 80 (HTTP)"
-echo " 若需外网直连 API，另放行 TCP $BACKEND_PORT"
+echo " 后端 API:  http://127.0.0.1:$BACKEND_PORT/health"
+if [[ "$SKIP_NGINX" == "1" ]]; then
+  echo " Nginx:     已跳过，请自行配置反代"
+elif [[ "$NGINX_MODE" == "snippet" ]]; then
+  echo " Nginx:     已写入 /etc/nginx/conf.d/projectx-api.conf"
+  echo "            在你的 server {} 里 include 该文件"
+  echo " 前端目录:  $INSTALL_DIR/frontend/dist"
+elif [[ "$NGINX_MODE" == "site" ]]; then
+  echo " 前端访问:  http://$PUBLIC_IP:$NGINX_HTTP_PORT/"
+fi
+echo " 日志:      journalctl -u projectx-backend -f"
 echo "══════════════════════════════════════════════════════"

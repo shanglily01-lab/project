@@ -3,79 +3,120 @@
 ## 架构
 
 ```
-浏览器 :80
+浏览器
     ↓
-  Nginx  ──→  静态前端 (frontend/dist)
-    │
-    └── /api /data /scoring /actions /socket.io
-              ↓
-         后端 Node.js :3060
+  Nginx（已有或新建）
+    ├── 静态前端 → frontend/dist
+    └── /api /data /scoring /actions /socket.io → 后端 :3060
               ↓
          远程 MySQL
 ```
 
 ## 前置条件
 
-1. **EC2 实例**：Amazon Linux 2023 或 Amazon Linux 2，建议 `t3.small` 及以上
-2. **安全组**：放行 **TCP 80**（HTTP）；如需直连 API 再放行 **TCP 3060**
-3. **MySQL**：已创建库表（本地开发跑过 `npm run db:migrate` 即可）
-4. **backend/.env**：在部署前填好，至少包含：
+1. **EC2 实例**：Amazon Linux 2023 / AL2
+2. **MySQL**：已建库并跑过 `npm run db:migrate`
+3. **backend/.env**：含 `DATABASE_URL`、`PORT=3060`、OpenProject 配置等
 
-```env
-DATABASE_URL=mysql://user:pass@host:3306/project
-PORT=3060
-OP_TARGET=https://你的-openproject地址
-OP_TOKEN=你的token
-```
+---
 
-密码含特殊字符时请 URL 编码（如 `@` → `%40`）。
+## 场景 A：服务器已有 Nginx（推荐）
 
-## 首次部署
+只部署应用 + 写入 API 反代片段，**不安装、不覆盖**你现有的 `:80` 配置。
 
 ```bash
-# 1. 将项目上传到 EC2（示例：scp / git clone）
-git clone <你的仓库> /home/ec2-user/projectx-core-share
-cd projectx-core-share
+git clone https://github.com/shanglily01-lab/project.git
+cd project
+cp backend/.env.example backend/.env && vim backend/.env
 
-# 2. 编辑环境变量
-cp backend/.env.example backend/.env
-vim backend/.env
+sudo NGINX_MODE=snippet bash deploy/aws-linux/deploy.sh
+```
 
-# 3. 一键部署（需 root）
+脚本会生成 `/etc/nginx/conf.d/projectx-api.conf`。在你现有的 `server { }` 里加入：
+
+```nginx
+server {
+    listen 80;
+    server_name your-domain.com;
+
+    # 你的其他配置...
+
+    # ── ProjectX 前端（选一个路径或单独 server）──
+    location / {
+        root /opt/projectx-core-share/frontend/dist;
+        try_files $uri $uri/ /index.html;
+    }
+
+    # ── ProjectX API 反代（必须）──
+    include /etc/nginx/conf.d/projectx-api.conf;
+}
+```
+
+然后：
+
+```bash
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+---
+
+## 场景 B：独立端口（不动现有 :80）
+
+在 **8080** 提供完整站点（前端 + API），与现有 Nginx 不冲突：
+
+```bash
+sudo NGINX_MODE=site NGINX_HTTP_PORT=8080 bash deploy/aws-linux/deploy.sh
+```
+
+访问：`http://<EC2公网IP>:8080/`（安全组需放行 8080）
+
+---
+
+## 场景 C：全新机器 / 空 Nginx
+
+自动监听 `:80`：
+
+```bash
 sudo bash deploy/aws-linux/deploy.sh
 ```
 
-部署完成后访问：`http://<EC2公网IP>/`
+---
+
+## 场景 D：只部署后端，自己配 Nginx
+
+```bash
+sudo SKIP_NGINX=1 bash deploy/aws-linux/deploy.sh
+```
+
+后端监听 `3060`，自行反代到该端口。
+
+---
 
 ## 更新代码
 
 ```bash
-cd /home/ec2-user/projectx-core-share
+cd ~/project
 git pull
 sudo bash deploy/aws-linux/update.sh
 ```
+
+---
 
 ## 常用运维
 
 | 操作 | 命令 |
 |------|------|
-| 查看后端日志 | `sudo journalctl -u projectx-backend -f` |
+| 后端日志 | `sudo journalctl -u projectx-backend -f` |
 | 重启后端 | `sudo systemctl restart projectx-backend` |
-| 重启 Nginx | `sudo systemctl restart nginx` |
+| 重载 Nginx | `sudo nginx -t && sudo systemctl reload nginx` |
 | 健康检查 | `curl http://127.0.0.1:3060/health` |
-| 数据库迁移 | `cd /opt/projectx-core-share/backend && set -a && source .env && set +a && npm run db:migrate` |
-| 导入 OP 数据 | `cd /opt/projectx-core-share/backend && set -a && source .env && set +a && npx tsx src/scripts/op-ingest.ts` |
 
 ## 环境变量
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
+| `SKIP_NGINX` | `0` | `1` = 完全不配置 Nginx |
+| `NGINX_MODE` | `auto` | `snippet` / `site` / `auto` |
+| `NGINX_HTTP_PORT` | `8080` | `site` 模式监听端口（`auto` 空环境用 80） |
+| `BACKEND_PORT` | `3060` | 后端端口 |
 | `INSTALL_DIR` | `/opt/projectx-core-share` | 安装目录 |
-| `BACKEND_PORT` | `3060` | 后端监听端口 |
-| `APP_USER` | `projectx` | 运行服务的系统用户 |
-
-示例：自定义端口
-
-```bash
-sudo BACKEND_PORT=3060 bash deploy/aws-linux/deploy.sh
-```
